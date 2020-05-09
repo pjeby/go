@@ -320,9 +320,11 @@ var lexTests = []lexTest{
 		tLeft,
 		mkItem(itemError, "unrecognized character in action: U+0001"),
 	}},
-	{"unclosed action", "{{\n}}", []item{
+	{"multiline action", "{{\n}}", []item{
 		tLeft,
-		mkItem(itemError, "unclosed action"),
+		mkItem(itemSpace, "\n"),
+		tRight,
+		tEOF,
 	}},
 	{"EOF in action", "{{range", []item{
 		tLeft,
@@ -483,23 +485,31 @@ var lexPosTests = []lexTest{
 		{itemText, 13, "xyz", 1},
 		{itemEOF, 16, "", 1},
 	}},
-	{"trimafter", "{{x -}}\n{{y}}", []item{
+	{"trimafter", "{{x -}}\n{{y}}{{z\t-}}\n a", []item{
 		{itemLeftDelim, 0, "{{", 1},
 		{itemIdentifier, 2, "x", 1},
 		{itemRightDelim, 5, "}}", 1},
 		{itemLeftDelim, 8, "{{", 2},
 		{itemIdentifier, 10, "y", 2},
 		{itemRightDelim, 11, "}}", 2},
-		{itemEOF, 13, "", 2},
+		{itemLeftDelim, 13, "{{", 2},
+		{itemIdentifier, 15, "z", 2},
+		{itemRightDelim, 18, "}}", 2},
+		{itemText,22, "a", 3},
+		{itemEOF, 23, "", 3},
 	}},
-	{"trimbefore", "{{x}}\n{{- y}}", []item{
+	{"trimbefore", "{{x}}\n{{- y}}z\t {{-\na}}", []item{
 		{itemLeftDelim, 0, "{{", 1},
 		{itemIdentifier, 2, "x", 1},
 		{itemRightDelim, 3, "}}", 1},
 		{itemLeftDelim, 6, "{{", 2},
 		{itemIdentifier, 10, "y", 2},
 		{itemRightDelim, 11, "}}", 2},
-		{itemEOF, 13, "", 2},
+		{itemText, 13, "z", 2},
+		{itemLeftDelim, 16, "{{", 2},
+		{itemIdentifier, 20, "a", 3},
+		{itemRightDelim, 21, "}}", 3},
+		{itemEOF, 23, "", 3},
 	}},
 }
 

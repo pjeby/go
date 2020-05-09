@@ -93,13 +93,12 @@ const eof = -1
 // leading spaces are trimmed. This is done entirely in the lexer; the
 // parser never sees it happen. We require an ASCII space to be
 // present to avoid ambiguity with things like "{{-3}}". It reads
-// better with the space present anyway. For simplicity, only ASCII
-// space does the job.
+// better with the space present anyway. The space may be an ASCII space, tab,
+// carriage return, or linefeed -- any of the same characters being trimmed.
 const (
 	spaceChars      = " \t\r\n" // These are the space characters defined by Go itself.
-	leftTrimMarker  = "- "      // Attached to left delimiter, trims trailing spaces from preceding text.
-	rightTrimMarker = " -"      // Attached to right delimiter, trims leading spaces from following text.
-	trimMarkerLen   = Pos(len(leftTrimMarker))
+	trimIndicator   = "-"       // Attached inside either delimiter, trims spaces from the outside text.
+	trimMarkerLen   = Pos(len(trimIndicator)+1) // marker is preceded or followed by one of spaceChars
 )
 
 // stateFn represents the state of the scanner as a function that returns the next state.
@@ -215,7 +214,7 @@ func lex(name, input, left, right string) *lexer {
 		input:          input,
 		leftDelim:      left,
 		rightDelim:     right,
-		trimRightDelim: rightTrimMarker + right,
+		trimRightDelim: trimIndicator + right,
 		items:          make(chan item),
 		line:           1,
 		startLine:      1,
@@ -248,7 +247,7 @@ func lexText(l *lexer) stateFn {
 		ldn := Pos(len(l.leftDelim))
 		l.pos += Pos(x)
 		trimLength := Pos(0)
-		if strings.HasPrefix(l.input[l.pos+ldn:], leftTrimMarker) {
+		if atLeftTrimMarker(l.input[l.pos+ldn:]) {
 			trimLength = rightTrimLength(l.input[l.start:l.pos])
 		}
 		l.pos -= trimLength
@@ -277,13 +276,20 @@ func rightTrimLength(s string) Pos {
 
 // atRightDelim reports whether the lexer is at a right delimiter, possibly preceded by a trim marker.
 func (l *lexer) atRightDelim() (delim, trimSpaces bool) {
-	if strings.HasPrefix(l.input[l.pos:], l.trimRightDelim) { // With trim marker.
-		return true, true
-	}
 	if strings.HasPrefix(l.input[l.pos:], l.rightDelim) { // Without trim marker.
 		return true, false
 	}
+	if r := l.peek(); isSpace(r) || isEndOfLine(r) {
+		if strings.HasPrefix(l.input[l.pos+1:], l.trimRightDelim) { // With trim marker.
+			return true, true
+		}
+	}
 	return false, false
+}
+
+// atLeftTrimMarker returns true if the string begins with a '-' and whitepace
+func atLeftTrimMarker(s string) bool {
+	return len(s) > 1 && s[0] == '-' && strings.Index(spaceChars, s[1:2]) > -1
 }
 
 // leftTrimLength returns the length of the spaces at the beginning of the string.
@@ -294,7 +300,7 @@ func leftTrimLength(s string) Pos {
 // lexLeftDelim scans the left delimiter, which is known to be present, possibly with a trim marker.
 func lexLeftDelim(l *lexer) stateFn {
 	l.pos += Pos(len(l.leftDelim))
-	trimSpace := strings.HasPrefix(l.input[l.pos:], leftTrimMarker)
+	trimSpace := atLeftTrimMarker(l.input[l.pos:])
 	afterMarker := Pos(0)
 	if trimSpace {
 		afterMarker = trimMarkerLen
@@ -336,7 +342,7 @@ func lexComment(l *lexer) stateFn {
 
 // lexRightDelim scans the right delimiter, which is known to be present, possibly with a trim marker.
 func lexRightDelim(l *lexer) stateFn {
-	trimSpace := strings.HasPrefix(l.input[l.pos:], rightTrimMarker)
+	_, trimSpace := l.atRightDelim()
 	if trimSpace {
 		l.pos += trimMarkerLen
 		l.ignore()
@@ -363,9 +369,9 @@ func lexInsideAction(l *lexer) stateFn {
 		return l.errorf("unclosed left paren")
 	}
 	switch r := l.next(); {
-	case r == eof || isEndOfLine(r):
+	case r == eof:
 		return l.errorf("unclosed action")
-	case isSpace(r):
+	case isSpace(r) || isEndOfLine(r):
 		l.backup() // Put space back in case we have " -}}".
 		return lexSpace
 	case r == '=':
@@ -425,7 +431,7 @@ func lexSpace(l *lexer) stateFn {
 	var numSpaces int
 	for {
 		r = l.peek()
-		if !isSpace(r) {
+		if !isSpace(r) && !isEndOfLine(r) {
 			break
 		}
 		l.next()
@@ -433,11 +439,9 @@ func lexSpace(l *lexer) stateFn {
 	}
 	// Be careful about a trim-marked closing delimiter, which has a minus
 	// after a space. We know there is a space, so check for the '-' that might follow.
-	if strings.HasPrefix(l.input[l.pos-1:], l.trimRightDelim) {
-		l.backup() // Before the space.
-		if numSpaces == 1 {
-			return lexRightDelim // On the delim, so go right to that.
-		}
+	if strings.HasPrefix(l.input[l.pos:], l.trimRightDelim) {
+		l.backup() // Before the final whitespace.
+		return lexRightDelim // On the delim, so go right to that.
 	}
 	l.emit(itemSpace)
 	return lexInsideAction
