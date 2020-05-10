@@ -273,12 +273,16 @@ func (t *Tree) parse() {
 	for t.peek().typ != itemEOF {
 		if t.peek().typ == itemLeftDelim {
 			delim := t.next()
-			if t.nextNonSpace().typ == itemDefine {
+			switch t.nextNonSpace().typ {
+			case itemDefine:
 				newT := New("definition") // name will be updated once we know it.
 				newT.text = t.text
 				newT.ParseName = t.ParseName
 				newT.startParse(t.funcs, t.lex, t.treeSet)
 				newT.parseDefinition()
+				continue
+			case itemRightDelim:
+				// Empty action; ignore it
 				continue
 			}
 			t.backup2(delim)

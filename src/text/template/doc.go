@@ -18,7 +18,8 @@ structure as execution proceeds.
 The input text for a template is UTF-8-encoded text in any format.
 "Actions"--data evaluations or control structures--are delimited by
 "{{" and "}}"; all text outside actions is copied to the output unchanged.
-Except for raw strings, actions may not span newlines, although comments can.
+Actions, comments, and raw strings can span newlines, but double-quoted strings
+cannot.
 
 Once parsed, a template may be executed safely in parallel, although if parallel
 executions share a Writer the output may be interleaved.
@@ -44,12 +45,14 @@ executed. For example, the string " items are made of " in the example above app
 on standard output when the program is run.
 
 However, to aid in formatting template source code, if an action's left delimiter
-(by default "{{") is followed immediately by a minus sign and ASCII space character
-("{{- "), all trailing white space is trimmed from the immediately preceding text.
-Similarly, if the right delimiter ("}}") is preceded by a space and minus sign
-(" -}}"), all leading white space is trimmed from the immediately following text.
-In these trim markers, the ASCII space must be present; "{{-3}}" parses as an
-action containing the number -3.
+(by default "{{") is followed immediately by a minus sign and whitespace (e.g. "{{- "),
+all trailing white space is trimmed from the immediately preceding text.
+Similarly, if the right delimiter ("}}") is preceded by whitespace and a minus sign
+(e.g. " -}}"), all leading white space is trimmed from the immediately following text.
+In these trim markers, the whitespace (space, newline, tab, or carriage return)
+must be present; "{{-3}}" parses as an action containing the number -3, and */
+//"{{-/* */-}}" parses the same as "{{ - - }}" (i.e., a syntax error).
+/*
 
 For instance, when executing the template whose source is
 
@@ -70,9 +73,11 @@ data, defined in detail in the corresponding sections that follow.
 */
 //	{{/* a comment */}}
 //	{{- /* a comment with white space trimmed from preceding and following text */ -}}
-//		A comment; discarded. May contain newlines.
-//		Comments do not nest and must start and end at the
-//		delimiters, as shown here.
+//		A comment; discarded. May contain newlines inside or outside the comment.
+//		Comments do not nest, but may appear anywhere whitespace is allowed in an action
+//		(except as part of a trim marker).  Actions that consist of all whitespace
+//		and/or comments are ignored, but whitespace trimming of the surrounding text is
+//		still performed, if applicable.
 /*
 
 	{{pipeline}}

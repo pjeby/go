@@ -82,6 +82,7 @@ var (
 	rawNL       = "`now is{{\n}}the time`" // Contains newline inside raw quote.
 	tRawQuote   = mkItem(itemRawString, raw)
 	tRawQuoteNL = mkItem(itemRawString, rawNL)
+	tComment    = mkItem(itemSpace, "")
 )
 
 var lexTests = []lexTest{
@@ -90,13 +91,26 @@ var lexTests = []lexTest{
 	{"text", `now is the time`, []item{mkItem(itemText, "now is the time"), tEOF}},
 	{"text with comment", "hello-{{/* this is a comment */}}-world", []item{
 		mkItem(itemText, "hello-"),
+		tLeft,
+		tComment,
+		tRight,
 		mkItem(itemText, "-world"),
 		tEOF,
 	}},
-	{"punctuation", "{{,@% }}", []item{
+	{"comments w/inside whitespace + trimming", "x   {{-\t/* ... */\n-}} y", []item{
+		mkItem(itemText, "x"),
 		tLeft,
+		tRight, // trailing comment/whitespace before trim delimiter is elided
+		mkItem(itemText, "y"),
+		tEOF,
+	}},
+	{"punctuation and whitespace tokens", "{{ ,/**/ @ /**/% /**/ }}", []item{
+		tLeft,
+		tSpace,
 		mkItem(itemChar, ","),
+		tSpace, // last comment or space run is kept
 		mkItem(itemChar, "@"),
+		mkItem(itemSpace, ""), // comment = "zero spaces"
 		mkItem(itemChar, "%"),
 		tSpace,
 		tRight,
@@ -113,6 +127,7 @@ var lexTests = []lexTest{
 		tEOF,
 	}},
 	{"empty action", `{{}}`, []item{tLeft, tRight, tEOF}},
+	{"whitespace action", "{{\n}}", []item{tLeft, mkItem(itemSpace, "\n"), tRight, tEOF}},
 	{"for", `{{for}}`, []item{tLeft, tFor, tRight, tEOF}},
 	{"block", `{{block "foo" .}}`, []item{
 		tLeft, tBlock, tSpace, mkItem(itemString, `"foo"`), tSpace, tDot, tRight, tEOF,
@@ -188,7 +203,7 @@ var lexTests = []lexTest{
 		tRight,
 		tEOF,
 	}},
-	{"dots", "{{.x . .2 .x.y.z}}", []item{
+	{"dots", "{{.x ./* comments are whitespace */ .2 .x.y.z/*here too*/ .}}", []item{
 		tLeft,
 		mkItem(itemField, ".x"),
 		tSpace,
@@ -199,6 +214,8 @@ var lexTests = []lexTest{
 		mkItem(itemField, ".x"),
 		mkItem(itemField, ".y"),
 		mkItem(itemField, ".z"),
+		tSpace,
+		tDot,
 		tRight,
 		tEOF,
 	}},
@@ -216,7 +233,7 @@ var lexTests = []lexTest{
 		tRight,
 		tEOF,
 	}},
-	{"variables", "{{$c := printf $ $hello $23 $ $var.Field .Method}}", []item{
+	{"variables", "{{$c := printf $ $hello $23 $/**/ $var.Field/* */.Method}}", []item{
 		tLeft,
 		mkItem(itemVariable, "$c"),
 		tSpace,
@@ -234,7 +251,7 @@ var lexTests = []lexTest{
 		tSpace,
 		mkItem(itemVariable, "$var"),
 		mkItem(itemField, ".Field"),
-		tSpace,
+		tComment,
 		mkItem(itemField, ".Method"),
 		tRight,
 		tEOF,
@@ -311,6 +328,8 @@ var lexTests = []lexTest{
 	}},
 	{"trimming spaces before and after comment", "hello- {{- /* hello */ -}} -world", []item{
 		mkItem(itemText, "hello-"),
+		tLeft,
+		tRight,
 		mkItem(itemText, "-world"),
 		tEOF,
 	}},
@@ -319,10 +338,6 @@ var lexTests = []lexTest{
 		mkItem(itemText, "#"),
 		tLeft,
 		mkItem(itemError, "unrecognized character in action: U+0001"),
-	}},
-	{"unclosed action", "{{\n}}", []item{
-		tLeft,
-		mkItem(itemError, "unclosed action"),
 	}},
 	{"EOF in action", "{{range", []item{
 		tLeft,
@@ -373,11 +388,16 @@ var lexTests = []lexTest{
 	}},
 	{"text with bad comment", "hello-{{/*/}}-world", []item{
 		mkItem(itemText, "hello-"),
+		tLeft,
 		mkItem(itemError, `unclosed comment`),
 	}},
 	{"text with comment close separated from delim", "hello-{{/* */ }}-world", []item{
 		mkItem(itemText, "hello-"),
-		mkItem(itemError, `comment ends before closing delimiter`),
+		tLeft,
+		tSpace,
+		tRight,
+		mkItem(itemText, "-world"),
+		tEOF,
 	}},
 	// This one is an error that we can't catch because it breaks templates with
 	// minimized JavaScript. Should have fixed it before Go 1.1.
