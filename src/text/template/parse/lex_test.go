@@ -93,13 +93,19 @@ var lexTests = []lexTest{
 		mkItem(itemText, "-world"),
 		tEOF,
 	}},
-	{"punctuation", "{{,@% }}", []item{
-		tLeft,
+	{"comments w/inside whitespace + trimming", "x   {{-\t/* ... */\n-}} y", []item{
+		mkItem(itemText, "x"),
+		mkItem(itemText, "y"),
+		tEOF,
+	}},
+	{"punctuation and whitespace tokens", "{{ ,/**/ @ /**/% /**/ }}", []item{
+		tLeft, // space or comments after opening delimiter are ignored
 		mkItem(itemChar, ","),
+		mkItem(itemSpace, " "), // last comment or space run is kept
 		mkItem(itemChar, "@"),
+		mkItem(itemSpace, ""), // comment = "zero spaces"
 		mkItem(itemChar, "%"),
-		tSpace,
-		tRight,
+		tRight, // space or comments before closing delimiter are ignored
 		tEOF,
 	}},
 	{"parens", "{{((3))}}", []item{
@@ -112,7 +118,8 @@ var lexTests = []lexTest{
 		tRight,
 		tEOF,
 	}},
-	{"empty action", `{{}}`, []item{tLeft, tRight, tEOF}},
+	{"empty action", `{{}}`, []item{tEOF}},
+	{"whitespace action", "{{\n}}", []item{tEOF}},
 	{"for", `{{for}}`, []item{tLeft, tFor, tRight, tEOF}},
 	{"block", `{{block "foo" .}}`, []item{
 		tLeft, tBlock, tSpace, mkItem(itemString, `"foo"`), tSpace, tDot, tRight, tEOF,
@@ -320,10 +327,6 @@ var lexTests = []lexTest{
 		tLeft,
 		mkItem(itemError, "unrecognized character in action: U+0001"),
 	}},
-	{"unclosed action", "{{\n}}", []item{
-		tLeft,
-		mkItem(itemError, "unclosed action"),
-	}},
 	{"EOF in action", "{{range", []item{
 		tLeft,
 		tRange,
@@ -377,7 +380,8 @@ var lexTests = []lexTest{
 	}},
 	{"text with comment close separated from delim", "hello-{{/* */ }}-world", []item{
 		mkItem(itemText, "hello-"),
-		mkItem(itemError, `comment ends before closing delimiter`),
+		mkItem(itemText, "-world"),
+		tEOF,
 	}},
 	// This one is an error that we can't catch because it breaks templates with
 	// minimized JavaScript. Should have fixed it before Go 1.1.
@@ -444,7 +448,7 @@ var lexDelimTests = []lexTest{
 		tRightDelim,
 		tEOF,
 	}},
-	{"empty action", `$$@@`, []item{tLeftDelim, tRightDelim, tEOF}},
+	{"empty action", `$$@@`, []item{tEOF}},
 	{"for", `$$for@@`, []item{tLeftDelim, tFor, tRightDelim, tEOF}},
 	{"quote", `$$"abc \n\t\" "@@`, []item{tLeftDelim, tQuote, tRightDelim, tEOF}},
 	{"raw quote", "$$" + raw + "@@", []item{tLeftDelim, tRawQuote, tRightDelim, tEOF}},
