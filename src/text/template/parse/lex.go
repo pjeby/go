@@ -11,31 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-// item represents a token or text string returned from the scanner.
-type item struct {
-	typ  itemType // The type of this item.
-	pos  Pos      // The starting position, in bytes, of this item in the input string.
-	val  string   // The value of this item.
-	line int      // The line number at the start of this item.
-}
-
-func (i item) String() string {
-	switch {
-	case i.typ == itemEOF:
-		return "EOF"
-	case i.typ == itemError:
-		return i.val
-	case i.typ > itemKeyword:
-		return fmt.Sprintf("<%s>", i.val)
-	case len(i.val) > 10:
-		return fmt.Sprintf("%.10q...", i.val)
-	}
-	return fmt.Sprintf("%q", i.val)
-}
-
-// itemType identifies the type of lex items.
-type itemType int
-
 const (
 	itemError        itemType = iota // error occurred; value is text of error
 	itemBool                         // boolean constant
@@ -85,8 +60,6 @@ var key = map[string]itemType{
 	"with":     itemWith,
 }
 
-const eof = -1
-
 // Trimming spaces.
 // If the action begins "{{- " rather than "{{", then all space/tab/newlines
 // preceding the action are trimmed; conversely if it ends " -}}" the
@@ -104,120 +77,12 @@ type stateFn func(*lexer) stateFn
 
 // lexer holds the state of the scanner.
 type lexer struct {
-	name           string    // the name of the input; used only for error reports
-	input          string    // the string being scanned
-	leftDelim      string    // start of action
-	rightDelim     string    // end of action
-	trimRightDelim string    // end of action with trim marker
-	pos            Pos       // current position in the input
-	end            Pos       // position after the end of input
-	start          Pos       // start position of this item
-	items          chan item // channel of scanned items
-	parenDepth     int       // nesting depth of ( ) exprs
-	startLine      int       // start line of this item
-	lastItem       item      // last item capture()d or emit()ted
-}
-
-// peek returns but does not consume the next rune in the input (and its width)
-// it's kept simple so it can be inlined into next()
-func (l *lexer) peek() (r rune, w int) {
-	if l.pos >= l.end {
-		r = eof
-	} else {
-		r, w = utf8.DecodeRuneInString(l.input[l.pos:])
-	}
-	return
-}
-
-// next returns the next rune in the input.
-func (l *lexer) next() (r rune, w int) {
-	r, w = l.peek()
-	l.advanceBy(w)
-	return
-}
-
-// backup steps back a known-valid width
-func (l *lexer) backup(width int) {
-	l.pos -= Pos(width)
-}
-
-// emit captures an item and passes it back to the client.
-func (l *lexer) emit(t itemType) {
-	l.emitItem(l.capture(t))
-}
-
-// emitItem passes a specified item back to the client.
-func (l *lexer) emitItem(i *item) {
-	l.items <- *i
-}
-
-// itemString returns the string that would be emitted for an item
-func (l *lexer) itemString() string {
-	return l.input[l.start:l.pos]
-}
-
-// capture creates an item from the current lex state and starts a new one
-func (l *lexer) capture(t itemType) (i *item) {
-	l.lastItem = item{t, l.start, l.itemString(), l.startLine}
-	l.startItem()
-	return &l.lastItem
-}
-
-// startItem marks the beginning of a new item
-func (l *lexer) startItem() {
-	l.startLine += strings.Count(l.itemString(), "\n")
-	l.start = l.pos
-}
-
-// haveItem is true if the position has advanced since the last new item
-func (l *lexer) haveItem() bool {
-	return l.pos > l.start
-}
-
-// advanceBy skips the specified number of bytes in the input
-func (l *lexer) advanceBy(width int) {
-	l.pos += Pos(width)
-}
-
-// accept consumes the next rune if it's from the valid set.
-func (l *lexer) accept(valid string) (found bool) {
-	r, w := l.peek()
-	if found = strings.ContainsRune(valid, r); found {
-		l.advanceBy(w)
-	}
-	return
-}
-
-// acceptRun consumes a run of runes from the valid set.
-func (l *lexer) acceptRun(valid string) {
-	for l.accept(valid) {
-	}
-}
-
-// hasPrefix returns true if the input prefix matches the string
-func (l *lexer) hasPrefix(prefix string) bool {
-	return strings.HasPrefix(l.input[l.pos:], prefix)
-}
-
-// consumePrefix consumes the prefix at the present location
-func (l *lexer) consumePrefix(prefix string) (found bool) {
-	if found = l.hasPrefix(prefix); found {
-		l.advanceBy(len(prefix))
-	}
-	return
-}
-
-// consumeUntil consumes input until delimiter is prefix (returns true) or EOF
-// (false). In either case, the delimiter itself has not been consumed.
-func (l *lexer) consumeUntil(delimiter string) (found bool) {
-	if x := strings.Index(l.input[l.pos:], delimiter); x >= 0 {
-		found = true
-		l.advanceBy(x)
-	} else {
-		// Jump to EOF
-		l.pos = l.end
-	}
-	return
+	scanner
+	name           string // the name of the input; used only for error reports
+	leftDelim      string // start of action
+	rightDelim     string // end of action
+	trimRightDelim string // end of action with trim marker
+	parenDepth     int    // nesting depth of ( ) exprs
 }
 
 // errorf emits an error token and terminates the scan by passing
@@ -229,8 +94,7 @@ func (l *lexer) errorf(format string, args ...interface{}) stateFn {
 
 // captureError captures a formatted error item without starting a new item
 func (l *lexer) captureError(format string, args ...interface{}) *item {
-	l.lastItem = item{itemError, l.start, fmt.Sprintf(format, args...), l.startLine}
-	return &l.lastItem
+	return l.captureString(itemError, fmt.Sprintf(format, args...))
 }
 
 // nextItem returns the next item from the input.
@@ -256,13 +120,10 @@ func lex(name, input, left, right string) *lexer {
 	}
 	l := &lexer{
 		name:           name,
-		input:          input,
-		end:            Pos(len(input)),
 		leftDelim:      left,
 		rightDelim:     right,
 		trimRightDelim: trimMarker + right,
-		items:          make(chan item),
-		startLine:      1,
+		scanner:        scan(input),
 	}
 	go l.run()
 	return l
