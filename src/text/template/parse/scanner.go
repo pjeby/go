@@ -35,16 +35,22 @@ func (i item) String() string {
 // itemType identifies the type of lex items.
 type itemType int
 
+// A set of characters to match for acceptRun or acceptAny
+type runeSet string
+
 const eof = -1
 
 type scanner struct {
-	input     string    // the string being scanned
-	pos       Pos       // current position in the input
-	end       Pos       // position after the end of input
-	start     Pos       // start position of this item
-	items     chan item // channel of scanned items
-	startLine int       // start line of this item
-	lastItem  item      // last item capture()d or emit()ted
+	input     string                 // the string being scanned
+	pos       Pos                    // current position in the input
+	end       Pos                    // position after the end of input
+	start     Pos                    // start position of this item
+	items     chan item              // channel of scanned items
+	startLine int                    // start line of this item
+	lastItem  item                   // last item capture()d or emit()ted
+	r         rune                   // current lookahead rune
+	w         int                    // current lookahead width
+	runs      map[runeSet]*[256]bool // cache of acceptRun patterns
 }
 
 // scan creates a new scanner for the input string.
@@ -54,31 +60,31 @@ func scan(input string) scanner {
 		end:       Pos(len(input)),
 		items:     make(chan item),
 		startLine: 1,
+		runs:      make(map[runeSet]*[256]bool),
 	}
+	s.advanceBy(0)
 	return *s
 }
 
 // peek returns but does not consume the next rune in the input (and its width)
 // it's kept simple so it can be inlined into next()
-func (s *scanner) peek() (r rune, w int) {
-	if s.pos >= s.end {
-		r = eof
-	} else {
-		r, w = utf8.DecodeRuneInString(s.input[s.pos:])
-	}
-	return
+func (s *scanner) peek() rune {
+	return s.r
 }
 
 // next returns the next rune in the input.
 func (s *scanner) next() (r rune, w int) {
-	r, w = s.peek()
+	r = s.r
+	w = s.w
 	s.advanceBy(w)
 	return
 }
 
-// backup steps back a known-valid width
-func (s *scanner) backup(width int) {
-	s.pos -= Pos(width)
+// backup steps back to a previous rune+width
+func (s *scanner) backup(r rune, w int) {
+	s.pos -= Pos(w)
+	s.r = r
+	s.w = w
 }
 
 // emit captures an item and passes it back to the client.
@@ -123,20 +129,57 @@ func (s *scanner) haveItem() bool {
 // advanceBy skips the specified number of bytes in the input
 func (s *scanner) advanceBy(width int) {
 	s.pos += Pos(width)
-}
-
-// accept consumes the next rune if it's from the valid set.
-func (s *scanner) accept(valid string) (found bool) {
-	r, w := s.peek()
-	if found = strings.ContainsRune(valid, r); found {
-		s.advanceBy(w)
+	if s.pos >= s.end {
+		s.r = eof
+		s.w = 0
+	} else {
+		s.r, s.w = utf8.DecodeRuneInString(s.input[s.pos:])
 	}
 	return
 }
 
-// acceptRun consumes a run of runes from the valid set.
-func (s *scanner) acceptRun(valid string) {
-	for s.accept(valid) {
+// accept consumes the next rune if it matches the supplied one
+func (s *scanner) accept(r rune) bool {
+	if s.r == r {
+		s.advanceBy(s.w)
+		return true
+	}
+	return false
+}
+
+// accept consumes the next rune if it matches either of the supplied ones
+func (s *scanner) acceptEither(r1 rune, r2 rune) bool {
+	if s.r == r1 || s.r == r2 {
+		s.advanceBy(s.w)
+		return true
+	}
+	return false
+}
+
+// acceptAny consumes the next byte if it's from the valid set.
+func (s *scanner) acceptAny(valid runeSet) (found bool) {
+	if strings.IndexRune(string(valid), s.r) >= 0 {
+		s.advanceBy(s.w)
+		return true
+	}
+	return false
+}
+
+// acceptRun consumes a run of ASCII characters from the valid set.  (It will
+// panic if given any non-ASCII runes.)  By restricting to ASCII, a bitmap
+// can be used to reduce scan time from N*M to N, where M is the number
+// of characters in the valid set and N is the length of the run.
+func (s *scanner) acceptRun(valid runeSet) {
+	pat := s.runs[valid]
+	if pat == nil {
+		pat = new([256]bool)
+		for _, b := range valid {
+			pat[b] = true
+		}
+		s.runs[valid] = pat
+	}
+	for s.r > -1 && s.r < 256 && pat[s.r] {
+		s.advanceBy(s.w)
 	}
 }
 
@@ -145,23 +188,19 @@ func (s *scanner) hasPrefix(prefix string) bool {
 	return strings.HasPrefix(s.input[s.pos:], prefix)
 }
 
-// consumePrefix consumes the prefix at the present location
-func (s *scanner) consumePrefix(prefix string) (found bool) {
-	if found = s.hasPrefix(prefix); found {
-		s.advanceBy(len(prefix))
-	}
-	return
-}
-
-// consumeUntil consumes input until delimiter is prefix (returns true) or EOF
-// (false). In either case, the delimiter itself has not been consumed.
-func (s *scanner) consumeUntil(delimiter string) (found bool) {
+// acceptUntil consumes input until the scanner hasPrefix(delimiter) or EOF.
+// The return is true if the delimiter is found, false if EOF was reached first.
+// In either case, the delimiter itself has not been consumed.  A delimiter
+// can be a sequence of rune, such as "/*" or "}}"; it is not a rune set as
+// with acceptAny or acceptRun.
+func (s *scanner) acceptUntil(delimiter string) (found bool) {
 	if x := strings.Index(s.input[s.pos:], delimiter); x >= 0 {
 		found = true
 		s.advanceBy(x)
 	} else {
 		// Jump to EOF
 		s.pos = s.end
+		s.advanceBy(0)
 	}
 	return
 }

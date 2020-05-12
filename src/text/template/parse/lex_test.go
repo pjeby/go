@@ -101,11 +101,12 @@ var lexTests = []lexTest{
 	{"punctuation and whitespace tokens", "{{ ,/**/ @ /**/% /**/ }}", []item{
 		tLeft, // space or comments after opening delimiter are ignored
 		mkItem(itemChar, ","),
-		mkItem(itemSpace, " "), // last comment or space run is kept
+		tSpace, // last comment or space run is kept
 		mkItem(itemChar, "@"),
 		mkItem(itemSpace, ""), // comment = "zero spaces"
 		mkItem(itemChar, "%"),
-		tRight, // space or comments before closing delimiter are ignored
+		tSpace,
+		tRight,
 		tEOF,
 	}},
 	{"parens", "{{((3))}}", []item{

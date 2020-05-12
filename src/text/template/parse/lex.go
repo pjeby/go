@@ -149,7 +149,7 @@ const (
 // lexText scans until an opening action delimiter, skipping empty actions
 // and doing text trimming.
 func lexText(l *lexer) stateFn {
-	if !l.consumeUntil(l.leftDelim) {
+	if !l.acceptUntil(l.leftDelim) {
 		// Correctly reached EOF.
 		if l.haveItem() {
 			l.emit(itemText)
@@ -161,24 +161,24 @@ func lexText(l *lexer) stateFn {
 	// We've reached a delimiter; save the text and delimiter, then do any
 	// necessary trimming
 	textItem := *l.capture(itemText)
-	l.consumePrefix(l.leftDelim)
+	l.advanceBy(len(l.leftDelim))
 
 	// Save the item until we know we're not a comment/empty action
 	delimiter := *l.capture(itemLeftDelim)
 
-	if l.hasPrefix(trimMarker) {
+	if l.peek() == rune(trimMarker[0]) {
 		// Check for whitespace after the -, to see if it's a trim indicator
-		_, w := l.next()
-		if l.accept(spaceChars) {
+		r, w := l.next()
+		if l.acceptAny(runeSet(spaceChars)) {
 			// trim spaces from the already-collected text
 			textItem.val = strings.TrimRight(textItem.val, spaceChars)
 		} else {
-			l.backup(w)
+			l.backup(r, w)
 		}
 		l.startItem() // don't include the trim marker in next token
 	}
 
-	if textItem.val != "" {
+	if len(textItem.val) > 0 {
 		// No need to emit if it was trimmed away (or empty to begin with)
 		l.emitItem(&textItem)
 	}
@@ -190,6 +190,10 @@ func lexText(l *lexer) stateFn {
 			l.emitItem(item)
 			return nil
 		}
+		return lexText
+	} else if l.hasPrefix(l.rightDelim) {
+		l.advanceBy(len(l.rightDelim))
+		l.startItem()
 		return lexText
 	}
 
@@ -215,51 +219,46 @@ func lexText(l *lexer) stateFn {
 // type itemSpace with text value "".
 func (l *lexer) scanPastWhitespace() (item *item, finished bool) {
 	for {
-		// Check for whitespace first
-		l.acceptRun(spaceChars)
-		if l.haveItem() {
+		switch r := l.peek(); {
+		case isSpace(r) || isEndOfLine(r):
+			// Check for whitespace first
+			l.acceptRun(runeSet(spaceChars))
 			// Could we be at a trim delimiter?
 			if l.hasPrefix(l.trimRightDelim) {
 				// Yep, process it
 				if l.parenDepth != 0 {
 					return l.captureError("unclosed left paren"), true
 				}
-				l.consumePrefix(trimMarker)
+				l.advanceBy(len(trimMarker))
 
 				l.startItem()
-				l.consumePrefix(l.rightDelim)
+				l.advanceBy(len(l.rightDelim))
 				item = l.capture(itemRightDelim)
 
 				// Trim whitespace
-				l.acceptRun(spaceChars)
+				l.acceptRun(runeSet(spaceChars))
 				l.startItem()
 				return item, true
 			}
 			// Otherwise save the token and look for comments
 			item = l.capture(itemSpace)
-		}
-
-		// After whitespace, check comments
-		if l.consumePrefix(leftComment) {
-			if !l.consumeUntil(rightComment) {
-				return l.captureError("unclosed comment"), true
-			}
-			l.consumePrefix(rightComment)
-			l.startItem()
-			item = l.capture(itemSpace) // comment = zero length space
 			continue
-		}
-
-		// Finally, check plain delimiter
-		if l.consumePrefix(l.rightDelim) {
-			if l.parenDepth != 0 {
-				return l.captureError("unclosed left paren"), true
+		case r == '/':
+			// After whitespace, check comments
+			if l.hasPrefix(leftComment) {
+				l.advanceBy(len(leftComment))
+				if !l.acceptUntil(rightComment) {
+					return l.captureError("unclosed comment"), true
+				}
+				l.advanceBy(len(rightComment))
+				l.startItem()
+				item = l.capture(itemSpace) // comment = zero length space
+				continue
 			}
-			return l.capture(itemRightDelim), true
+			fallthrough
+		default:
+			return item, false
 		}
-
-		// Either spaces, empty space, or nothing
-		return item, false
 	}
 }
 
@@ -270,24 +269,37 @@ func lexInsideAction(l *lexer) stateFn {
 	// Pipe symbols separate and are emitted.
 
 	// Scan for whitespace, comments, or a closing delimiter
-	item, actionFinished := l.scanPastWhitespace()
-	if item != nil {
-		l.emitItem(item)
-		if item.typ == itemError {
+
+	if l.hasPrefix(l.rightDelim) {
+		l.advanceBy(len(l.rightDelim))
+		if l.parenDepth != 0 {
+			l.errorf("unclosed left paren")
 			return nil
 		}
-	}
-	if actionFinished {
+		l.emit(itemRightDelim)
 		return lexText
 	}
 
 	switch r, w := l.next(); {
 	case r == eof:
 		return l.errorf("unclosed action")
+	case isSpace(r) || isEndOfLine(r) || (r == '/' && l.peek() == '*'):
+		l.backup(r, w)
+		item, actionFinished := l.scanPastWhitespace()
+		if item != nil {
+			l.emitItem(item)
+			if item.typ == itemError {
+				return nil
+			}
+		}
+		if actionFinished {
+			return lexText
+		}
+		return lexInsideAction
 	case r == '=':
 		l.emit(itemAssign)
 	case r == ':':
-		if !l.accept("=") {
+		if !l.accept('=') {
 			return l.errorf("expected :=")
 		}
 		l.emit(itemDeclare)
@@ -303,15 +315,15 @@ func lexInsideAction(l *lexer) stateFn {
 		return lexChar
 	case r == '.':
 		// look-ahead for ".field"
-		if r, _ := l.peek(); r < '0' || '9' < r {
+		if r := l.peek(); r < '0' || '9' < r {
 			return lexField
 		}
 		fallthrough // '.' can start a number.
 	case r == '+' || r == '-' || ('0' <= r && r <= '9'):
-		l.backup(w)
+		l.backup(r, w)
 		return lexNumber
 	case isAlphaNumeric(r):
-		l.backup(w)
+		l.backup(r, w)
 		return lexIdentifier
 	case r == '(':
 		l.emit(itemLeftParen)
@@ -334,11 +346,10 @@ func lexInsideAction(l *lexer) stateFn {
 func lexIdentifier(l *lexer) stateFn {
 Loop:
 	for {
-		switch r, w := l.next(); {
+		switch r := l.peek(); {
 		case isAlphaNumeric(r):
-			// absorb.
+			l.next() // absorb.
 		default:
-			l.backup(w)
 			word := l.itemString()
 			if !l.atTerminator() {
 				return l.errorf("bad character %#U", r)
@@ -391,7 +402,7 @@ func lexFieldOrVariable(l *lexer, typ itemType) stateFn {
 	for {
 		r, w = l.next()
 		if !isAlphaNumeric(r) {
-			l.backup(w)
+			l.backup(r, w)
 			break
 		}
 	}
@@ -407,7 +418,7 @@ func lexFieldOrVariable(l *lexer, typ itemType) stateFn {
 // like "$x+2" not being acceptable without a space, in case we decide one
 // day to implement arithmetic.
 func (l *lexer) atTerminator() bool {
-	r, _ := l.peek()
+	r := l.peek()
 	if isSpace(r) || isEndOfLine(r) {
 		return true
 	}
@@ -453,7 +464,7 @@ func lexNumber(l *lexer) stateFn {
 	if !l.scanNumber() {
 		return l.errorf("bad number syntax: %q", l.itemString())
 	}
-	if sign, _ := l.peek(); sign == '+' || sign == '-' {
+	if sign := l.peek(); sign == '+' || sign == '-' {
 		// Complex: 1+2i. No spaces, must end in 'i'.
 		if !l.scanNumber() || !strings.HasSuffix(l.itemString(), "i") {
 			return l.errorf("bad number syntax: %q", l.itemString())
@@ -467,35 +478,35 @@ func lexNumber(l *lexer) stateFn {
 
 func (l *lexer) scanNumber() bool {
 	// Optional leading sign.
-	l.accept("+-")
+	l.acceptEither('+', '-')
 	// Is it hex?
 	digits := "0123456789_"
-	if l.accept("0") {
+	if l.accept('0') {
 		// Note: Leading 0 does not mean octal in floats.
-		if l.accept("xX") {
+		if l.acceptEither('x', 'X') {
 			digits = "0123456789abcdefABCDEF_"
-		} else if l.accept("oO") {
+		} else if l.acceptEither('o', 'O') {
 			digits = "01234567_"
-		} else if l.accept("bB") {
+		} else if l.acceptEither('b', 'B') {
 			digits = "01_"
 		}
 	}
-	l.acceptRun(digits)
-	if l.accept(".") {
-		l.acceptRun(digits)
+	l.acceptRun(runeSet(digits))
+	if l.accept('.') {
+		l.acceptRun(runeSet(digits))
 	}
-	if len(digits) == 10+1 && l.accept("eE") {
-		l.accept("+-")
-		l.acceptRun("0123456789_")
+	if len(digits) == 10+1 && l.acceptEither('e', 'E') {
+		l.acceptEither('+', '-')
+		l.acceptRun(runeSet("0123456789_"))
 	}
-	if len(digits) == 16+6+1 && l.accept("pP") {
-		l.accept("+-")
-		l.acceptRun("0123456789_")
+	if len(digits) == 16+6+1 && l.acceptEither('p', 'P') {
+		l.acceptEither('+', '-')
+		l.acceptRun(runeSet("0123456789_"))
 	}
 	// Is it imaginary?
-	l.accept("i")
+	l.accept('i')
 	// Next thing mustn't be alphanumeric.
-	if r, _ := l.peek(); isAlphaNumeric(r) {
+	if isAlphaNumeric(l.peek()) {
 		l.next()
 		return false
 	}
@@ -524,10 +535,10 @@ Loop:
 
 // lexRawQuote scans a raw quoted string.
 func lexRawQuote(l *lexer) stateFn {
-	if !l.consumeUntil("`") {
+	if !l.acceptUntil("`") {
 		return l.errorf("unterminated raw quoted string")
 	}
-	l.consumePrefix("`")
+	l.advanceBy(len("`"))
 	l.emit(itemRawString)
 	return lexInsideAction
 }
