@@ -35,8 +35,15 @@ func (i item) String() string {
 // itemType identifies the type of lex items.
 type itemType int
 
-// A set of characters to match for acceptRun or acceptAny
-type runeSet string
+// A mask of ASCII characters to match for acceptRun or acceptAny
+type scan_mask [128]bool
+
+// Convert a string to a character mask; will panic if given non-ASCII runes!
+func scanset(s string) (mask *scan_mask) {
+	mask = new(scan_mask)
+	for _, r := range s { mask[r] = true }
+	return
+}
 
 // Sentinel for end of input
 const eof = -1
@@ -50,7 +57,6 @@ type scanner struct {
 	lastItem  item                   // last item capture()d
 	nextRune  rune                   // current lookahead rune
 	nextWidth int                    // current lookahead width
-	runs      map[runeSet]*[256]bool // cache of acceptRun patterns
 }
 
 // scan creates a new scanner for the input string.
@@ -59,7 +65,6 @@ func scan(input string) scanner {
 		input:     input,
 		end:       Pos(len(input)),
 		startLine: 1,
-		runs:      make(map[runeSet]*[256]bool),
 	}
 	s.advanceBy(0) // initialize the lookahead rune
 	return *s
@@ -152,30 +157,17 @@ func (s *scanner) acceptEither(r1 rune, r2 rune) bool {
 	return false
 }
 
-// acceptAny consumes the next byte if it's from the valid set.
-func (s *scanner) acceptAny(valid runeSet) (found bool) {
-	if strings.IndexRune(string(valid), s.nextRune) >= 0 {
+// acceptAny consumes the next rune if it's in the given mask.
+func (s *scanner) acceptAny(mask *scan_mask) (found bool) {
+	if found = (s.nextRune & ^127) == 0 && mask[s.nextRune]; found {
 		s.advanceBy(s.nextWidth)
-		return true
 	}
-	return false
+	return
 }
 
-// acceptRun consumes a run of ASCII characters from the valid set.  (It will
-// panic if given any non-ASCII runes.)  The ASCII restriction is so a lookup
-// table can be used to reduce scan time from N*M to N, where M is the number
-// of characters in the valid set and N is the length of the run.
-func (s *scanner) acceptRun(valid runeSet) {
-	pat := s.runs[valid]
-	if pat == nil {
-		pat = new([256]bool)
-		for _, b := range valid {
-			pat[b] = true
-		}
-		s.runs[valid] = pat
-	}
-	for s.nextRune > -1 && s.nextRune < 256 && pat[s.nextRune] {
-		s.advanceBy(s.nextWidth)
+// acceptRun consumes a series of zero or more runes matching the given mask.
+func (s *scanner) acceptRun(mask *scan_mask) {
+	for s.acceptAny(mask) {
 	}
 }
 
@@ -187,9 +179,7 @@ func (s *scanner) hasPrefix(prefix string) bool {
 
 // acceptUntil consumes input until the scanner hasPrefix(delimiter) or EOF.
 // The return is true if the delimiter is found, false if EOF was reached first.
-// In either case, the delimiter itself has not been consumed.  A delimiter
-// is a sequence of runes, such as "*/" or "{{"; it is not a runeSet as
-// with acceptAny or acceptRun.
+// In either case, the delimiter itself has not been consumed.
 func (s *scanner) acceptUntil(delimiter string) (found bool) {
 	if x := strings.Index(s.input[s.pos:], delimiter); x >= 0 {
 		found = true

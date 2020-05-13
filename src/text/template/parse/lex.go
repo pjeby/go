@@ -72,6 +72,8 @@ const (
 	trimMarker = '-'       // Attached inside a delimiter, trims space from outside it
 )
 
+var whitespace = scanset(spaceChars)
+
 // stateFn represents the state of the scanner as a function that returns the next state.
 type stateFn func(*lexer) stateFn
 
@@ -184,7 +186,7 @@ func lexText(l *lexer) stateFn {
 	if l.peek() == trimMarker {
 		// Check for whitespace after the -, to see if it's a trim indicator
 		r, w := l.next()
-		if l.acceptAny(runeSet(spaceChars)) {
+		if l.acceptAny(whitespace) {
 			// trim spaces from the already-collected text
 			textItem.val = strings.TrimRight(textItem.val, spaceChars)
 		} else {
@@ -281,7 +283,7 @@ func lexSpace(l *lexer) stateFn {
 	for {
 		switch r := l.peek(); {
 		case isSpace(r) || isEndOfLine(r):
-			l.acceptRun(runeSet(spaceChars))
+			l.acceptRun(whitespace)
 			// Could we be at a trim delimiter?
 			if l.hasPrefix(l.trimRightDelim) {
 				return lexRightTrimDelimiter
@@ -320,7 +322,7 @@ func lexRightTrimDelimiter(l *lexer) stateFn {
 	l.emit(itemRightDelim)
 
 	// Trim whitespace
-	l.acceptRun(runeSet(spaceChars))
+	l.acceptRun(whitespace)
 	l.startNewItem()
 	return lexText
 }
@@ -459,32 +461,40 @@ func lexNumber(l *lexer) stateFn {
 	return lexInsideAction
 }
 
+var bases = [17]*scan_mask{
+	10: scanset("0123456789_"),
+	16: scanset("0123456789abcdefABCDEF_"),
+	8:  scanset("01234567_"),
+	2:  scanset("01_"),
+}
+
 func (l *lexer) scanNumber() bool {
 	// Optional leading sign.
 	l.acceptEither('+', '-')
 	// Is it hex?
-	digits := runeSet("0123456789_")
+	base := 10
 	if l.accept('0') {
 		// Note: Leading 0 does not mean octal in floats.
 		if l.acceptEither('x', 'X') {
-			digits = "0123456789abcdefABCDEF_"
+			base = 16
 		} else if l.acceptEither('o', 'O') {
-			digits = "01234567_"
+			base = 8
 		} else if l.acceptEither('b', 'B') {
-			digits = "01_"
+			base = 2
 		}
 	}
+	digits := bases[base]
 	l.acceptRun(digits)
 	if l.accept('.') {
 		l.acceptRun(digits)
 	}
-	if len(digits) == 10+1 && l.acceptEither('e', 'E') {
+	if base == 10 && l.acceptEither('e', 'E') {
 		l.acceptEither('+', '-')
-		l.acceptRun(runeSet("0123456789_"))
+		l.acceptRun(bases[10])
 	}
-	if len(digits) == 16+6+1 && l.acceptEither('p', 'P') {
+	if base == 16 && l.acceptEither('p', 'P') {
 		l.acceptEither('+', '-')
-		l.acceptRun(runeSet("0123456789_"))
+		l.acceptRun(bases[10])
 	}
 	// Is it imaginary?
 	l.accept('i')
