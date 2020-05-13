@@ -161,8 +161,8 @@ const (
 	rightComment = "*/"
 )
 
-// lexText scans until an opening action delimiter, skipping empty actions
-// and doing text trimming.
+// lexText scans until an opening action delimiter, trimming whitespace from
+// the preceding text if applicable.
 func lexText(l *lexer) stateFn {
 	if !l.acceptUntil(l.leftDelim) {
 		// Correctly reached EOF.
@@ -178,7 +178,7 @@ func lexText(l *lexer) stateFn {
 	textItem := *l.capture(itemText)
 	l.advanceBy(len(l.leftDelim))
 
-	// Save the item until we know we're not a comment/empty action
+	// Save the delimiter item until we've handled the trimming
 	delimiter := *l.capture(itemLeftDelim)
 
 	if l.peek() == trimMarker {

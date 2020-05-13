@@ -282,6 +282,7 @@ func (t *Tree) parse() {
 				newT.parseDefinition()
 				continue
 			case itemRightDelim:
+				// Empty action; ignore it
 				continue
 			}
 			t.backup2(delim)

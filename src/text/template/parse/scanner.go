@@ -38,6 +38,7 @@ type itemType int
 // A set of characters to match for acceptRun or acceptAny
 type runeSet string
 
+// Sentinel for end of input
 const eof = -1
 
 type scanner struct {
@@ -46,9 +47,9 @@ type scanner struct {
 	end       Pos                    // position after the end of input
 	start     Pos                    // start position of this item
 	startLine int                    // start line of this item
-	lastItem  item                   // last item capture()d or emit()ted
-	r         rune                   // current lookahead rune
-	w         int                    // current lookahead width
+	lastItem  item                   // last item capture()d
+	nextRune  rune                   // current lookahead rune
+	nextWidth int                    // current lookahead width
 	runs      map[runeSet]*[256]bool // cache of acceptRun patterns
 }
 
@@ -60,37 +61,40 @@ func scan(input string) scanner {
 		startLine: 1,
 		runs:      make(map[runeSet]*[256]bool),
 	}
-	s.advanceBy(0)
+	s.advanceBy(0) // initialize the lookahead rune
 	return *s
 }
 
-// peek returns but does not consume the next rune in the input (and its width)
-// it's kept simple so it can be inlined into next()
+// peek returns but does not consume the next rune in the input
 func (s *scanner) peek() rune {
-	return s.r
+	return s.nextRune
 }
 
-// next returns the next rune in the input.
+// next returns the next rune in the input and advances past it.
 func (s *scanner) next() (r rune, w int) {
-	r = s.r
-	w = s.w
+	r = s.nextRune
+	w = s.nextWidth
 	s.advanceBy(w)
 	return
 }
 
-// backup steps back to a previous rune+width
+// backup steps back to a previous rune+width returned by next().  No error
+// checking is performed: you are responsible for passing in the right r/w pair.
 func (s *scanner) backup(r rune, w int) {
 	s.pos -= Pos(w)
-	s.r = r
-	s.w = w
+	s.nextRune = r
+	s.nextWidth = w
 }
 
-// itemString returns the string that would be emitted for an item
+// itemString returns the string that would be emitted for an item, if you
+// emitted it now.
 func (s *scanner) itemString() string {
 	return s.input[s.start:s.pos]
 }
 
-// capture creates an item from the current lex state and starts a new one
+// capture creates an item from the current lex state and starts a new one.
+// The return value is a pointer to within the struct, so you must copy it
+// if you want to use the item past the next capture operation.
 func (s *scanner) capture(t itemType) (i *item) {
 	s.lastItem = item{t, s.start, s.itemString(), s.startLine}
 	s.startNewItem()
@@ -103,33 +107,37 @@ func (s *scanner) captureString(typ itemType, text string) *item {
 	return &s.lastItem
 }
 
-// startNewItem marks the beginning of a new item
+// startNewItem marks the beginning of a new item to be captured later
 func (s *scanner) startNewItem() {
 	s.startLine += strings.Count(s.itemString(), "\n")
 	s.start = s.pos
 }
 
-// haveItem is true if the position has advanced since the last new item
+// haveItem is true if the position has advanced since the last new item start
 func (s *scanner) haveItem() bool {
 	return s.pos > s.start
 }
 
-// advanceBy skips the specified number of bytes in the input
+// advanceBy skips the specified number of bytes in the input; it should only
+// be used with a value known to match a valid prefix of the input at the
+// current scanning position (e.g. the len() of something matched with
+// hasPrefix(), or the length of the delimiter after a successful acceptUntil.
 func (s *scanner) advanceBy(width int) {
 	s.pos += Pos(width)
 	if s.pos >= s.end {
-		s.r = eof
-		s.w = 0
+		s.nextRune = eof
+		s.nextWidth = 0
 	} else {
-		s.r, s.w = utf8.DecodeRuneInString(s.input[s.pos:])
+		s.nextRune, s.nextWidth = utf8.DecodeRuneInString(s.input[s.pos:])
 	}
 	return
 }
 
-// accept consumes the next rune if it matches the supplied one
+// accept consumes the next rune if it matches the supplied one; return value
+// is true if it did so.
 func (s *scanner) accept(r rune) bool {
-	if s.r == r {
-		s.advanceBy(s.w)
+	if s.nextRune == r {
+		s.advanceBy(s.nextWidth)
 		return true
 	}
 	return false
@@ -137,8 +145,8 @@ func (s *scanner) accept(r rune) bool {
 
 // accept consumes the next rune if it matches either of the supplied ones
 func (s *scanner) acceptEither(r1 rune, r2 rune) bool {
-	if s.r == r1 || s.r == r2 {
-		s.advanceBy(s.w)
+	if s.nextRune == r1 || s.nextRune == r2 {
+		s.advanceBy(s.nextWidth)
 		return true
 	}
 	return false
@@ -146,16 +154,16 @@ func (s *scanner) acceptEither(r1 rune, r2 rune) bool {
 
 // acceptAny consumes the next byte if it's from the valid set.
 func (s *scanner) acceptAny(valid runeSet) (found bool) {
-	if strings.IndexRune(string(valid), s.r) >= 0 {
-		s.advanceBy(s.w)
+	if strings.IndexRune(string(valid), s.nextRune) >= 0 {
+		s.advanceBy(s.nextWidth)
 		return true
 	}
 	return false
 }
 
 // acceptRun consumes a run of ASCII characters from the valid set.  (It will
-// panic if given any non-ASCII runes.)  By restricting to ASCII, a bitmap
-// can be used to reduce scan time from N*M to N, where M is the number
+// panic if given any non-ASCII runes.)  The ASCII restriction is so a lookup
+// table can be used to reduce scan time from N*M to N, where M is the number
 // of characters in the valid set and N is the length of the run.
 func (s *scanner) acceptRun(valid runeSet) {
 	pat := s.runs[valid]
@@ -166,12 +174,13 @@ func (s *scanner) acceptRun(valid runeSet) {
 		}
 		s.runs[valid] = pat
 	}
-	for s.r > -1 && s.r < 256 && pat[s.r] {
-		s.advanceBy(s.w)
+	for s.nextRune > -1 && s.nextRune < 256 && pat[s.nextRune] {
+		s.advanceBy(s.nextWidth)
 	}
 }
 
-// hasPrefix returns true if the input prefix matches the string
+// hasPrefix returns true if the input prefix matches the string at the current
+// position
 func (s *scanner) hasPrefix(prefix string) bool {
 	return strings.HasPrefix(s.input[s.pos:], prefix)
 }
@@ -179,7 +188,7 @@ func (s *scanner) hasPrefix(prefix string) bool {
 // acceptUntil consumes input until the scanner hasPrefix(delimiter) or EOF.
 // The return is true if the delimiter is found, false if EOF was reached first.
 // In either case, the delimiter itself has not been consumed.  A delimiter
-// can be a sequence of rune, such as "/*" or "}}"; it is not a rune set as
+// is a sequence of runes, such as "*/" or "{{"; it is not a runeSet as
 // with acceptAny or acceptRun.
 func (s *scanner) acceptUntil(delimiter string) (found bool) {
 	if x := strings.Index(s.input[s.pos:], delimiter); x >= 0 {
