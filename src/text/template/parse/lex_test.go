@@ -82,6 +82,7 @@ var (
 	rawNL       = "`now is{{\n}}the time`" // Contains newline inside raw quote.
 	tRawQuote   = mkItem(itemRawString, raw)
 	tRawQuoteNL = mkItem(itemRawString, rawNL)
+	tComment    = mkItem(itemSpace, "")
 )
 
 var lexTests = []lexTest{
@@ -90,16 +91,22 @@ var lexTests = []lexTest{
 	{"text", `now is the time`, []item{mkItem(itemText, "now is the time"), tEOF}},
 	{"text with comment", "hello-{{/* this is a comment */}}-world", []item{
 		mkItem(itemText, "hello-"),
+		tLeft,
+		tComment,
+		tRight,
 		mkItem(itemText, "-world"),
 		tEOF,
 	}},
 	{"comments w/inside whitespace + trimming", "x   {{-\t/* ... */\n-}} y", []item{
 		mkItem(itemText, "x"),
+		tLeft,
+		tRight, // trailing comment/whitespace before trim delimiter is elided
 		mkItem(itemText, "y"),
 		tEOF,
 	}},
 	{"punctuation and whitespace tokens", "{{ ,/**/ @ /**/% /**/ }}", []item{
-		tLeft, // space or comments after opening delimiter are ignored
+		tLeft,
+		tSpace,
 		mkItem(itemChar, ","),
 		tSpace, // last comment or space run is kept
 		mkItem(itemChar, "@"),
@@ -119,8 +126,8 @@ var lexTests = []lexTest{
 		tRight,
 		tEOF,
 	}},
-	{"empty action", `{{}}`, []item{tEOF}},
-	{"whitespace action", "{{\n}}", []item{tEOF}},
+	{"empty action", `{{}}`, []item{tLeft, tRight, tEOF}},
+	{"whitespace action", "{{\n}}", []item{tLeft, mkItem(itemSpace, "\n"), tRight, tEOF}},
 	{"for", `{{for}}`, []item{tLeft, tFor, tRight, tEOF}},
 	{"block", `{{block "foo" .}}`, []item{
 		tLeft, tBlock, tSpace, mkItem(itemString, `"foo"`), tSpace, tDot, tRight, tEOF,
@@ -319,6 +326,8 @@ var lexTests = []lexTest{
 	}},
 	{"trimming spaces before and after comment", "hello- {{- /* hello */ -}} -world", []item{
 		mkItem(itemText, "hello-"),
+		tLeft,
+		tRight,
 		mkItem(itemText, "-world"),
 		tEOF,
 	}},
@@ -377,10 +386,14 @@ var lexTests = []lexTest{
 	}},
 	{"text with bad comment", "hello-{{/*/}}-world", []item{
 		mkItem(itemText, "hello-"),
+		tLeft,
 		mkItem(itemError, `unclosed comment`),
 	}},
 	{"text with comment close separated from delim", "hello-{{/* */ }}-world", []item{
 		mkItem(itemText, "hello-"),
+		tLeft,
+		tSpace,
+		tRight,
 		mkItem(itemText, "-world"),
 		tEOF,
 	}},
@@ -449,7 +462,7 @@ var lexDelimTests = []lexTest{
 		tRightDelim,
 		tEOF,
 	}},
-	{"empty action", `$$@@`, []item{tEOF}},
+	{"empty action", `$$@@`, []item{tLeftDelim, tRightDelim, tEOF}},
 	{"for", `$$for@@`, []item{tLeftDelim, tFor, tRightDelim, tEOF}},
 	{"quote", `$$"abc \n\t\" "@@`, []item{tLeftDelim, tQuote, tRightDelim, tEOF}},
 	{"raw quote", "$$" + raw + "@@", []item{tLeftDelim, tRawQuote, tRightDelim, tEOF}},

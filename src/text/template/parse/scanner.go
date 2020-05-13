@@ -45,7 +45,6 @@ type scanner struct {
 	pos       Pos                    // current position in the input
 	end       Pos                    // position after the end of input
 	start     Pos                    // start position of this item
-	items     chan item              // channel of scanned items
 	startLine int                    // start line of this item
 	lastItem  item                   // last item capture()d or emit()ted
 	r         rune                   // current lookahead rune
@@ -58,7 +57,6 @@ func scan(input string) scanner {
 	s := &scanner{
 		input:     input,
 		end:       Pos(len(input)),
-		items:     make(chan item),
 		startLine: 1,
 		runs:      make(map[runeSet]*[256]bool),
 	}
@@ -87,16 +85,6 @@ func (s *scanner) backup(r rune, w int) {
 	s.w = w
 }
 
-// emit captures an item and passes it back to the client.
-func (s *scanner) emit(t itemType) {
-	s.emitItem(s.capture(t))
-}
-
-// emitItem passes a specified item back to the client.
-func (s *scanner) emitItem(i *item) {
-	s.items <- *i
-}
-
 // itemString returns the string that would be emitted for an item
 func (s *scanner) itemString() string {
 	return s.input[s.start:s.pos]
@@ -105,7 +93,7 @@ func (s *scanner) itemString() string {
 // capture creates an item from the current lex state and starts a new one
 func (s *scanner) capture(t itemType) (i *item) {
 	s.lastItem = item{t, s.start, s.itemString(), s.startLine}
-	s.startItem()
+	s.startNewItem()
 	return &s.lastItem
 }
 
@@ -115,8 +103,8 @@ func (s *scanner) captureString(typ itemType, text string) *item {
 	return &s.lastItem
 }
 
-// startItem marks the beginning of a new item
-func (s *scanner) startItem() {
+// startNewItem marks the beginning of a new item
+func (s *scanner) startNewItem() {
 	s.startLine += strings.Count(s.itemString(), "\n")
 	s.start = s.pos
 }
