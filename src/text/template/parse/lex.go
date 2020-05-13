@@ -69,7 +69,7 @@ var key = map[string]itemType{
 // better with whitespace present anyway.
 const (
 	spaceChars = " \t\r\n" // These are the space characters defined by Go itself.
-	trimMarker = "-"       // Attached inside a delimiter, trims space from outside it
+	trimMarker = '-'       // Attached inside a delimiter, trims space from outside it
 )
 
 // stateFn represents the state of the scanner as a function that returns the next state.
@@ -135,7 +135,7 @@ func lex(name, input, left, right string) *lexer {
 		name:                name,
 		leftDelim:           left,
 		rightDelim:          right,
-		trimRightDelim:      trimMarker + right,
+		trimRightDelim:      string(trimMarker) + right,
 		rightDelimStartRune: r,
 		items:               make(chan item),
 		scanner:             scan(input),
@@ -181,7 +181,7 @@ func lexText(l *lexer) stateFn {
 	// Save the item until we know we're not a comment/empty action
 	delimiter := *l.capture(itemLeftDelim)
 
-	if l.peek() == rune(trimMarker[0]) {
+	if l.peek() == trimMarker {
 		// Check for whitespace after the -, to see if it's a trim indicator
 		r, w := l.next()
 		if l.acceptAny(runeSet(spaceChars)) {
@@ -289,19 +289,15 @@ func lexSpace(l *lexer) stateFn {
 			// Nope, save the token and look for comments
 			item = l.capture(itemSpace)
 			continue
-		case r == '/':
-			// After whitespace, check comments
-			if l.hasPrefix(leftComment) {
-				l.advanceBy(len(leftComment))
-				if !l.acceptUntil(rightComment) {
-					return l.errorf("unclosed comment")
-				}
-				l.advanceBy(len(rightComment))
-				l.startNewItem()
-				item = l.capture(itemSpace) // comment = zero length space
-				continue
+		case r == '/' && l.hasPrefix(leftComment):
+			l.advanceBy(len(leftComment))
+			if !l.acceptUntil(rightComment) {
+				return l.errorf("unclosed comment")
 			}
-			fallthrough
+			l.advanceBy(len(rightComment))
+			l.startNewItem()
+			item = l.capture(itemSpace) // comment = zero length space
+			continue
 		default:
 			if item != nil {
 				l.emitItem(item)
@@ -318,7 +314,7 @@ func lexRightTrimDelimiter(l *lexer) stateFn {
 	if l.parenDepth != 0 {
 		return l.errorf("unclosed left paren")
 	}
-	l.advanceBy(len(trimMarker))
+	l.accept(trimMarker)
 	l.startNewItem()
 	l.advanceBy(len(l.rightDelim))
 	l.emit(itemRightDelim)
