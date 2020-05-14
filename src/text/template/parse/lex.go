@@ -95,20 +95,17 @@ func (l *lexer) emit(t itemType) {
 }
 
 // emitItem passes a specified item back to the client.
-func (l *lexer) emitItem(i *item) {
-	l.items <- *i
+func (l *lexer) emitItem(i item) {
+	l.items <- i
 }
 
 // errorf emits an error token and terminates the scan by passing
 // back a nil pointer that will be the next state, terminating l.nextItem.
 func (l *lexer) errorf(format string, args ...interface{}) stateFn {
-	l.emitItem(l.captureError(format, args...))
+	i := l.capture(itemError)
+	i.val = fmt.Sprintf(format, args...)
+	l.emitItem(i)
 	return nil
-}
-
-// captureError captures a formatted error item without starting a new item
-func (l *lexer) captureError(format string, args ...interface{}) *item {
-	return l.captureString(itemError, fmt.Sprintf(format, args...))
 }
 
 // nextItem returns the next item from the input.
@@ -132,13 +129,13 @@ func lex(name, input, left, right string) *lexer {
 	if right == "" {
 		right = rightDelim
 	}
-	r, _ := utf8.DecodeRuneInString(right)
+	startRune, _ := utf8.DecodeRuneInString(right)
 	l := &lexer{
 		name:                name,
 		leftDelim:           left,
 		rightDelim:          right,
 		trimRightDelim:      string(trimMarker) + right,
-		rightDelimStartRune: r,
+		rightDelimStartRune: startRune,
 		items:               make(chan item),
 		scanner:             scan(input),
 	}
@@ -177,11 +174,11 @@ func lexText(l *lexer) stateFn {
 
 	// We've reached a delimiter; save the text and delimiter, then do any
 	// necessary trimming
-	textItem := *l.capture(itemText)
+	textItem := l.capture(itemText)
 	l.advanceBy(len(l.leftDelim))
 
 	// Save the delimiter item until we've handled the trimming
-	delimiter := *l.capture(itemLeftDelim)
+	delimiter := l.capture(itemLeftDelim)
 
 	if l.peek() == trimMarker {
 		// Check for whitespace after the -, to see if it's a trim indicator
@@ -197,11 +194,11 @@ func lexText(l *lexer) stateFn {
 
 	if len(textItem.val) > 0 {
 		// No need to emit if it was trimmed away (or empty to begin with)
-		l.emitItem(&textItem)
+		l.emitItem(textItem)
 	}
 
 	// Time to lex the action body
-	l.emitItem(&delimiter)
+	l.emitItem(delimiter)
 	l.parenDepth = 0
 	return lexInsideAction
 }
@@ -279,17 +276,20 @@ func lexInsideAction(l *lexer) stateFn {
 // the most recent run of spaces, an empty space item for the most recent comment,
 // an error (for an unclosed comment), or a delimiter (for a trim delimiter).
 func lexSpace(l *lexer) stateFn {
-	var item *item
+	var item item
+	var found bool
 	for {
 		switch r := l.peek(); {
 		case isSpace(r) || isEndOfLine(r):
-			l.acceptRun(whitespace)
+			for l.acceptAny(whitespace) {
+			}
 			// Could we be at a trim delimiter?
 			if l.hasPrefix(l.trimRightDelim) {
 				return lexRightTrimDelimiter
 			}
 			// Nope, save the token and look for comments
 			item = l.capture(itemSpace)
+			found = true
 			continue
 		case r == '/' && l.hasPrefix(leftComment):
 			l.advanceBy(len(leftComment))
@@ -299,9 +299,10 @@ func lexSpace(l *lexer) stateFn {
 			l.advanceBy(len(rightComment))
 			l.startNewItem()
 			item = l.capture(itemSpace) // comment = zero length space
+			found = true
 			continue
 		default:
-			if item != nil {
+			if found {
 				l.emitItem(item)
 			}
 			return lexInsideAction
@@ -322,7 +323,8 @@ func lexRightTrimDelimiter(l *lexer) stateFn {
 	l.emit(itemRightDelim)
 
 	// Trim whitespace
-	l.acceptRun(whitespace)
+	for l.acceptAny(whitespace) {
+	}
 	l.startNewItem()
 	return lexText
 }
@@ -484,17 +486,21 @@ func (l *lexer) scanNumber() bool {
 		}
 	}
 	digits := bases[base]
-	l.acceptRun(digits)
+	for l.acceptAny(digits) {
+	}
 	if l.accept('.') {
-		l.acceptRun(digits)
+		for l.acceptAny(digits) {
+		}
 	}
 	if base == 10 && l.acceptEither('e', 'E') {
 		l.acceptEither('+', '-')
-		l.acceptRun(bases[10])
+		for l.acceptAny(digits) {
+		}
 	}
 	if base == 16 && l.acceptEither('p', 'P') {
 		l.acceptEither('+', '-')
-		l.acceptRun(bases[10])
+		for l.acceptAny(digits) {
+		}
 	}
 	// Is it imaginary?
 	l.accept('i')

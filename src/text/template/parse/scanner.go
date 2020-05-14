@@ -41,7 +41,9 @@ type scan_mask [128]bool
 // Convert a string to a character mask; will panic if given non-ASCII runes!
 func scanset(s string) (mask *scan_mask) {
 	mask = new(scan_mask)
-	for _, r := range s { mask[r] = true }
+	for _, r := range s {
+		mask[r] = true
+	}
 	return
 }
 
@@ -49,14 +51,13 @@ func scanset(s string) (mask *scan_mask) {
 const eof = -1
 
 type scanner struct {
-	input     string                 // the string being scanned
-	pos       Pos                    // current position in the input
-	end       Pos                    // position after the end of input
-	start     Pos                    // start position of this item
-	startLine int                    // start line of this item
-	lastItem  item                   // last item capture()d
-	nextRune  rune                   // current lookahead rune
-	nextWidth int                    // current lookahead width
+	input      string // the string being scanned
+	pos        Pos    // current position in the input
+	end        Pos    // position after the end of input
+	start      Pos    // start position of this item
+	startLine  int    // start line of this item
+	nextRune   rune   // current lookahead rune
+	nextWidth  int    // current lookahead width
 }
 
 // scan creates a new scanner for the input string.
@@ -100,16 +101,10 @@ func (s *scanner) itemString() string {
 // capture creates an item from the current lex state and starts a new one.
 // The return value is a pointer to within the struct, so you must copy it
 // if you want to use the item past the next capture operation.
-func (s *scanner) capture(t itemType) (i *item) {
-	s.lastItem = item{t, s.start, s.itemString(), s.startLine}
+func (s *scanner) capture(t itemType) (i item) {
+	i = item{t, s.start, s.itemString(), s.startLine}
 	s.startNewItem()
-	return &s.lastItem
-}
-
-// captureString captures an explicit string in place of s.itemString()
-func (s *scanner) captureString(typ itemType, text string) *item {
-	s.lastItem = item{typ, s.start, text, s.startLine}
-	return &s.lastItem
+	return
 }
 
 // startNewItem marks the beginning of a new item to be captured later
@@ -163,12 +158,6 @@ func (s *scanner) acceptAny(mask *scan_mask) (found bool) {
 		s.advanceBy(s.nextWidth)
 	}
 	return
-}
-
-// acceptRun consumes a series of zero or more runes matching the given mask.
-func (s *scanner) acceptRun(mask *scan_mask) {
-	for s.acceptAny(mask) {
-	}
 }
 
 // hasPrefix returns true if the input prefix matches the string at the current
