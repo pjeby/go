@@ -4,9 +4,52 @@
 
 package parse
 
+/*
+The scanner implemented in this file is written based on the assumption
+that most scanning operations (dispatch on a character, match character
+classes, etc.) will be targeting ASCII characters, while still supporting
+full utf8 as input.  But because ASCII characters only appear in utf8 to
+represent themselves, and the scanner's output is always a slice of the input,
+some significant optimizations are possible.
+
+Specifically, whenever the scanner is asked to look for something in ASCII
+(i.e. via accept(), acceptAny(), and acceptEither()), it can avoid utf8
+decoding and just compare bytes.  If the byte isn't ASCII, it's not going to
+match anyway, so the cursor stays put at a valid position.
+
+If, on the other hand, a check to match something non-ASCII is needed, one
+can use peek() to force decoding of the current rune before trying to move past
+it, or use hasPrefix() to safely compare against another utf8-encoded string.
+(Or acceptUntil() to skip ahead to a known-valid, position-independent delimiter
+string.)
+
+The only other requirement to avoid an invalid scan position is that any
+position manipulation be done with known-valid byte lengths.  For backup() this
+is easy: just use the length returned by next().  For advanceBy(), use the
+length of a utf8-encoded string you've already matched, or a known character
+width.  And only call next() if you've just called peek(), or know the
+current rune is ASCII.
+
+Following these rules allows a significant performance increase, as it allows
+the scanner to avoid utf8 decoding at the majority of input positions, either
+because they're ASCII, or going to be compared to ASCII.  In addition, the
+thus-simplified scanner methods can almost all be inlined back into the lexer,
+speeding things up even further.  (This requires that neither peek() nor next()
+call each other, lest they get too big to inline.)
+
+Finally, to support fast character-class testing, a scanset() function is
+supplied that converts an ASCII string to a *[128]bool mask with a contains(rune)
+method.  This method returns false if the rune is EOF, non-ASCII, or not in the
+string that was used to create the mask.  (The scanner's acceptAny(mask) method
+is a faster form of mask.contains(scanner.peek()), that simply compares against
+the current byte without needing to decode it first, calling next() if it's a
+match...  which is safe because a match means it's ASCII.)
+*/
+
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -38,6 +81,11 @@ type itemType int
 // A mask of ASCII characters to match for acceptRun or acceptAny
 type scan_mask [128]bool
 
+// contains returns true if the mask contains the given rune
+func (mask *scan_mask) contains(r rune) bool {
+	return (r & ^127) == 0 && mask[r]
+}
+
 // Convert a string to a character mask; will panic if given non-ASCII runes!
 func scanset(s string) (mask *scan_mask) {
 	mask = new(scan_mask)
@@ -51,13 +99,13 @@ func scanset(s string) (mask *scan_mask) {
 const eof = -1
 
 type scanner struct {
-	input      string // the string being scanned
-	pos        Pos    // current position in the input
-	end        Pos    // position after the end of input
-	start      Pos    // start position of this item
-	startLine  int    // start line of this item
-	nextRune   rune   // current lookahead rune
-	nextWidth  int    // current lookahead width
+	input     string // the string being scanned
+	pos       Pos    // current position in the input
+	end       Pos    // position after the end of input
+	start     Pos    // start position of this item
+	startLine int    // start line of this item
+	nextRune  rune   // current lookahead rune
+	nextWidth int    // current lookahead width
 }
 
 // scan creates a new scanner for the input string.
@@ -71,36 +119,37 @@ func scan(input string) scanner {
 	return *s
 }
 
-// peek returns but does not consume the next rune in the input
+// peek returns (but does not consume) the next rune in the input.
 func (s *scanner) peek() rune {
+	// only decode if needed; eof is -1, so will not decode
+	if s.nextRune > unicode.MaxASCII {
+		s.nextRune, s.nextWidth = utf8.DecodeRuneInString(s.input[s.pos:])
+	}
 	return s.nextRune
 }
 
-// next returns the next rune in the input and advances past it.
-func (s *scanner) next() (r rune, w int) {
-	r = s.nextRune
+// next advances the input by one rune, returning the size of that rune in
+// bytes so you can backup() if needed.  (May advance into the middle of a
+// utf8-encoded character if you haven't called peek() since the last change
+// in cursor position.)
+func (s *scanner) next() (w int) {
 	w = s.nextWidth
 	s.advanceBy(w)
 	return
 }
 
-// backup steps back to a previous rune+width returned by next().  No error
-// checking is performed: you are responsible for passing in the right r/w pair.
-func (s *scanner) backup(r rune, w int) {
-	s.pos -= Pos(w)
-	s.nextRune = r
-	s.nextWidth = w
+// backup steps back by the specified number of bytes; may result in an invalid
+// position unless you know exactly what you're backing up over.
+func (s *scanner) backup(w int) {
+	s.advanceBy(-w)
 }
 
-// itemString returns the string that would be emitted for an item, if you
-// emitted it now.
+// itemString returns the string of input accepted since the last startNewItem
 func (s *scanner) itemString() string {
 	return s.input[s.start:s.pos]
 }
 
-// capture creates an item from the current lex state and starts a new one.
-// The return value is a pointer to within the struct, so you must copy it
-// if you want to use the item past the next capture operation.
+// capture creates an item from itemString() and starts a new one
 func (s *scanner) capture(t itemType) (i item) {
 	i = item{t, s.start, s.itemString(), s.startLine}
 	s.startNewItem()
@@ -120,21 +169,25 @@ func (s *scanner) haveItem() bool {
 
 // advanceBy skips the specified number of bytes in the input; it should only
 // be used with a value known to match a valid prefix of the input at the
-// current scanning position (e.g. the len() of something matched with
-// hasPrefix(), or the length of the delimiter after a successful acceptUntil.
+// current scanning position (such as the len() of something matched with
+// hasPrefix(), or the length of the delimiter after using acceptUntil()).
 func (s *scanner) advanceBy(width int) {
 	s.pos += Pos(width)
 	if s.pos >= s.end {
 		s.nextRune = eof
 		s.nextWidth = 0
 	} else {
-		s.nextRune, s.nextWidth = utf8.DecodeRuneInString(s.input[s.pos:])
+		// optimistically assume next character is ASCII.  If we're wrong,
+		// peek() will correct it
+		s.nextRune = rune(s.input[s.pos])
+		s.nextWidth = 1
 	}
 	return
 }
 
-// accept consumes the next rune if it matches the supplied one; return value
-// is true if it did so.
+// accept returns true and consumes the next input rune if it matches the
+// supplied rune.  The supplied rune MUST be ASCII, unless peek() is called
+// first.
 func (s *scanner) accept(r rune) bool {
 	if s.nextRune == r {
 		s.advanceBy(s.nextWidth)
@@ -143,7 +196,9 @@ func (s *scanner) accept(r rune) bool {
 	return false
 }
 
-// accept consumes the next rune if it matches either of the supplied ones
+// acceptEither returns true and consumes the next input rune if it matches
+// either of the supplied runes.  The supplied runes MUST be ASCII, unless peek()
+// is called first.
 func (s *scanner) acceptEither(r1 rune, r2 rune) bool {
 	if s.nextRune == r1 || s.nextRune == r2 {
 		s.advanceBy(s.nextWidth)
@@ -152,16 +207,16 @@ func (s *scanner) acceptEither(r1 rune, r2 rune) bool {
 	return false
 }
 
-// acceptAny consumes the next rune if it's in the given mask.
+// acceptAny returns true and consumes the next input rune if it's in the given
+// scanset() mask.
 func (s *scanner) acceptAny(mask *scan_mask) (found bool) {
-	if found = (s.nextRune & ^127) == 0 && mask[s.nextRune]; found {
-		s.advanceBy(s.nextWidth)
+	if found = mask.contains(s.nextRune); found {
+		s.advanceBy(1) // mask can only match ASCII runes
 	}
 	return
 }
 
-// hasPrefix returns true if the input prefix matches the string at the current
-// position
+// hasPrefix returns true if the given string is a prefix of the remaining input
 func (s *scanner) hasPrefix(prefix string) bool {
 	return strings.HasPrefix(s.input[s.pos:], prefix)
 }
