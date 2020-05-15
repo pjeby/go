@@ -203,7 +203,7 @@ var lexTests = []lexTest{
 		tRight,
 		tEOF,
 	}},
-	{"dots", "{{.x . .2 .x.y.z}}", []item{
+	{"dots", "{{.x ./* comments are whitespace */ .2 .x.y.z/*here too*/ .}}", []item{
 		tLeft,
 		mkItem(itemField, ".x"),
 		tSpace,
@@ -214,6 +214,8 @@ var lexTests = []lexTest{
 		mkItem(itemField, ".x"),
 		mkItem(itemField, ".y"),
 		mkItem(itemField, ".z"),
+		tSpace,
+		tDot,
 		tRight,
 		tEOF,
 	}},
@@ -231,7 +233,7 @@ var lexTests = []lexTest{
 		tRight,
 		tEOF,
 	}},
-	{"variables", "{{$c := printf $ $hello $23 $ $var.Field .Method}}", []item{
+	{"variables", "{{$c := printf $ $hello $23 $/**/ $var.Field/* */.Method}}", []item{
 		tLeft,
 		mkItem(itemVariable, "$c"),
 		tSpace,
@@ -249,7 +251,7 @@ var lexTests = []lexTest{
 		tSpace,
 		mkItem(itemVariable, "$var"),
 		mkItem(itemField, ".Field"),
-		tSpace,
+		tComment,
 		mkItem(itemField, ".Method"),
 		tRight,
 		tEOF,

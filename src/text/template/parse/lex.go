@@ -393,8 +393,8 @@ func (l *lexer) atTerminator() bool {
 		l.backup(1) // always ASCII
 		return true
 	}
-	// Only other valid cases are eof or closing delimiter; otherwise false
-	return l.peek() == eof || l.hasPrefix(l.rightDelim)
+	// Only other valid cases are eof, comment, or closing delimiter; otherwise false
+	return l.peek() == eof || l.hasPrefix(leftComment) || l.hasPrefix(l.rightDelim)
 }
 
 // lexChar scans a character constant. The initial quote is already
@@ -512,7 +512,7 @@ func lexRawQuote(l *lexer) stateFn {
 	if !l.acceptUntil("`") {
 		return l.errorf("unterminated raw quoted string")
 	}
-	l.advanceBy(len("`"))
+	l.accept('`')
 	l.emit(itemRawString)
 	return lexInsideAction
 }
