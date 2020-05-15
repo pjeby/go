@@ -27,8 +27,9 @@ The only other requirement to avoid an invalid scan position is that any
 position manipulation be done with known-valid byte lengths.  For backup() this
 is easy: just use the length returned by next().  For advanceBy(), use the
 length of a utf8-encoded string you've already matched, or a known character
-width.  And only call next() if you've just called peek(), or know the
-current rune is ASCII.
+width.  And only call next() if you've just called peek(), know the current rune
+is ASCII, or will be looping past any non-ASCII characters searching for
+specific ASCII character(s).
 
 Following these rules allows a significant performance increase, as it allows
 the scanner to avoid utf8 decoding at the majority of input positions, either

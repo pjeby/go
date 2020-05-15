@@ -285,7 +285,9 @@ func lexSpace(l *lexer) stateFn {
 			// Nope, save the token and look for comments
 			item = l.capture(itemSpace)
 			found = true
-		} else if l.hasPrefix(leftComment) {
+			// fall through to comment check
+		}
+		if l.hasPrefix(leftComment) {
 			l.advanceBy(len(leftComment))
 			if !l.acceptUntil(rightComment) {
 				return l.errorf("unclosed comment")
@@ -294,12 +296,14 @@ func lexSpace(l *lexer) stateFn {
 			l.startNewItem()
 			item = l.capture(itemSpace) // comment = zero length space
 			found = true
-		} else {
-			if found {
-				l.emitItem(item)
-			}
-			return lexInsideAction
+			continue // loop and look for whitespace
 		}
+		// No more comments or whitespace
+		if found {
+			// But we got something before this point, so give it up
+			l.emitItem(item)
+		}
+		return lexInsideAction
 	}
 }
 
@@ -474,7 +478,7 @@ func (l *lexer) scanNumber() bool {
 	}
 	if base == 16 && l.acceptEither('p', 'P') {
 		l.acceptEither('+', '-')
-		for l.acceptAny(digits) {
+		for l.acceptAny(bases[10]) {
 		}
 	}
 	// Is it imaginary?
