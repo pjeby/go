@@ -18,7 +18,8 @@ structure as execution proceeds.
 The input text for a template is UTF-8-encoded text in any format.
 "Actions"--data evaluations or control structures--are delimited by
 "{{" and "}}"; all text outside actions is copied to the output unchanged.
-Except for raw strings, actions may not span newlines, although comments can.
+Actions, comments, and raw strings can span newlines, but double-quoted strings
+cannot.
 
 Once parsed, a template may be executed safely in parallel, although if parallel
 executions share a Writer the output may be interleaved.

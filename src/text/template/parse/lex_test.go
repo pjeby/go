@@ -322,7 +322,9 @@ var lexTests = []lexTest{
 	}},
 	{"unclosed action", "{{\n}}", []item{
 		tLeft,
-		mkItem(itemError, "unclosed action"),
+		mkItem(itemSpace, "\n"),
+		tRight,
+		tEOF,
 	}},
 	{"EOF in action", "{{range", []item{
 		tLeft,

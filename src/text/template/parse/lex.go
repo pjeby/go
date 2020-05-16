@@ -363,9 +363,9 @@ func lexInsideAction(l *lexer) stateFn {
 		return l.errorf("unclosed left paren")
 	}
 	switch r := l.next(); {
-	case r == eof || isEndOfLine(r):
+	case r == eof:
 		return l.errorf("unclosed action")
-	case isSpace(r):
+	case isSpace(r) || isEndOfLine(r):
 		l.backup() // Put space back in case we have " -}}".
 		return lexSpace
 	case r == '=':
@@ -425,7 +425,7 @@ func lexSpace(l *lexer) stateFn {
 	var numSpaces int
 	for {
 		r = l.peek()
-		if !isSpace(r) {
+		if !isSpace(r) && !isEndOfLine(r) {
 			break
 		}
 		l.next()
